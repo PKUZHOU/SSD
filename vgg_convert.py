@@ -1,7 +1,8 @@
 import torch
 
 from network import SSD300
-
+import torchvision
+torchvision.models.vgg16_bn()
 
 vgg = torch.load('vgg16-397923af.pth')
 

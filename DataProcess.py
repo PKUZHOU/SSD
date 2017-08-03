@@ -1,7 +1,9 @@
 import torch
 import numpy as np
 from torch.autograd import Variable
+import time
 import random
+from bbious import build_tg,bbox_ious
 import torch.nn.functional as F
 class dataProcess:
     def __init__(self):
@@ -30,12 +32,18 @@ class dataProcess:
                         DefBoxes.append([x,y,s1,s2])
                         DefBoxes.append([x,y,s2,s1])
         self.DefBoxes = torch.Tensor(DefBoxes)
+        Defboxes_c = torch.Tensor(self.DefBoxes.size())
+        Defboxes_c[:, 0] = self.DefBoxes[:, 0] - self.DefBoxes[:, 2] * 0.5
+        Defboxes_c[:, 1] = self.DefBoxes[:, 1] - self.DefBoxes[:, 3] * 0.5
+        Defboxes_c[:, 2] = self.DefBoxes[:, 0] + self.DefBoxes[:, 2] * 0.5
+        Defboxes_c[:, 3] = self.DefBoxes[:, 1] + self.DefBoxes[:, 3] * 0.5
+        self.Defboxes_c = Defboxes_c.numpy().astype(np.float)
         #DefBoxes : (x,y,w,h)
     def ious(self,box1,box2):
 
         #defbox : [8732,4] xmin,ymin,xmax,ymax
         #box : [,4] xmin,ymin,xmax,ymax
-        num_box1 = box1.size(0)
+        '''num_box1 = box1.size(0)
         num_box2 = box2.size(0)
         bbious = torch.Tensor(num_box1,num_box2)
         for x in range(num_box1):
@@ -55,41 +63,52 @@ class dataProcess:
                     iou = (U/(s1+s2-U))
                 except:
                     iou = 0
-                bbious[x][y]=iou
+                bbious[x][y]=iou'''
+
+        bbious = bbox_ious(
+        np.ascontiguousarray(box1, dtype=np.float),
+        np.ascontiguousarray(box2, dtype=np.float)
+        )
+
         return bbious
 
 
     def loss(self,gtboxes,gtclses,predbox,pred_cls):
         #gtboxes :(,4)xmin,ymin,xmax,ymax
+        none_pos = False
         scale = 300.
         gtboxes =  gtboxes/scale
-        Defboxes = torch.Tensor(self.DefBoxes.size())
-        Defboxes[:,0] = self.DefBoxes[:,0]-self.DefBoxes[:,2]*0.5
-        Defboxes[:,1] = self.DefBoxes[:,1]-self.DefBoxes[:,3]*0.5
-        Defboxes[:,2] = self.DefBoxes[:,0]+self.DefBoxes[:,2]*0.5
-        Defboxes[:,3] = self.DefBoxes[:,1]+self.DefBoxes[:,3]*0.5
+        gtboxes = gtboxes.numpy().astype(np.float)
+        gtclses = gtclses.numpy().astype(np.float)
+
+        #convert cx cy w h to xmin ymin xmax ymax
 
 
-        ious = self.ious(gtboxes,Defboxes)
-        pos_mask = ious>0.5
-        tgboxes = torch.zeros(predbox.size())
-        tgcls = torch.zeros(pred_cls.size())
-
-
-
+        ious = self.ious(gtboxes,self.Defboxes_c)
+        #ious : N*8732
+        ious_ = torch.from_numpy(ious)
+        pos_mask = ious_>0.5
         pos_num = pos_mask.view(-1).long().sum()
-        neg_num = 3*pos_num
-        for i in range(ious.size(0)):
+        pos_mask = pos_mask.numpy()
+        if pos_num==0:
+            pos_num = 1
+            none_pos = True
+        neg_num = int(3*pos_num)
+        #calculate the numbers of pos and neg
+
+
+
+        DefBoxes_np = self.DefBoxes.numpy().astype(np.float)
+        '''for i in range(ious.shape[0]):
             xmin, ymin, xmax, ymax = gtboxes[i][0], gtboxes[i][1], gtboxes[i][2], gtboxes[i][3]
             w = xmax - xmin
             h = ymax - ymin
             x = xmin + 0.5 * w
             y = ymin + 0.5 * h
             cls = gtclses[i]
-            indice = torch.nonzero(pos_mask[i])
+            indice = np.nonzero(pos_mask[i])
             if(len(indice)!=0):
                 for ind in indice:
-                    ind = int(ind[0])
                     defboxes = self.DefBoxes[ind,:]
                     tgboxes[ind][0]= (x-defboxes[0])/defboxes[2]
                     tgboxes[ind][1]= (y-defboxes[1])/defboxes[3]
@@ -97,21 +116,45 @@ class dataProcess:
                     tgboxes[ind][3]= np.log(h/defboxes[3])
                     tgcls[ind][int(cls[0])]=1
             else:
-                pass
+                pass'''
+        tg = build_tg(gtclses,gtboxes,ious,pos_mask,DefBoxes_np).astype(np.float32)
+        tgboxes = tg[:,:4]
+        tgcls = tg[:,4:]
 
-
+        #build the pos target
+        tgboxes = torch.from_numpy(tgboxes)
+        tgcls = torch.from_numpy(tgcls)
         pos_mask = (torch.sum(tgcls,dim=1)>0)
         pos_inds = torch.nonzero(pos_mask)
-        pos_inds = [int(ind[0]) for ind in pos_inds]
+
+        try:
+            pos_inds = [int(ind[0]) for ind in pos_inds]
+        except:
+            pos_inds = []
+
+
+
         for x in np.random.randint(0,pos_mask.size(0),neg_num):
-            if x in pos_inds:
-                pass
-            else:
+            if len(pos_inds)==0:
                 tgcls[x][0]=1
+            else:
+                if x in pos_inds:
+                    pass
+                else:
+                    tgcls[x][0]=1
+
 
         box_mask = pos_mask.expand_as(predbox)
+        box_mask = box_mask.cuda()
         cls_mask = (torch.sum(tgcls,dim=1)>0).expand_as(pred_cls)
-        tgboxes = tgboxes[box_mask].view(-1,4)
+        cls_mask = cls_mask.cuda()
+
+
+        # predbox = predbox.cpu()
+        # pred_cls = pred_cls.cpu()
+        tgboxes = tgboxes.cuda()
+        tgboxes = tgboxes[box_mask].view(-1, 4)
+        tgcls = tgcls.cuda()
         tgcls = tgcls[cls_mask].view(-1,21)
         predbox = predbox[box_mask].view(-1,4)
         pred_cls = pred_cls[cls_mask].view(-1,21)
@@ -121,7 +164,14 @@ class dataProcess:
         tgcls = tgcls.squeeze(1)
 
         loc_loss = F.smooth_l1_loss(predbox,tgboxes)
+        if none_pos:
+            loc_loss = Variable(torch.Tensor([0])).cuda()
         cls_loss = F.cross_entropy(pred_cls,tgcls)
+        import math
+        if math.isnan(loc_loss.data[0]):
+            print loc_loss[0]
+        else:
+            pass
         return loc_loss,cls_loss
 
 

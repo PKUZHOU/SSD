@@ -5,8 +5,8 @@ import numpy as np
 import re
 class IMDB:
     def __init__(self):
-        self.ImgPath = '/home/zhou/PycharmProjects/SSD/VOC2007/VOC2007/JPEGImages/'
-        self.AnnoPath = '/home/zhou/PycharmProjects/SSD/VOC2007/VOC2007/Annotations/'
+        self.ImgPath = '/datasets/voc/VOCdevkit/VOC2007/JPEGImages/'
+        self.AnnoPath = '/datasets/voc/VOCdevkit/VOC2007/Annotations/'
         self.imagelist = os.listdir(self.ImgPath)
         self.Annos =[]
         self.classes = {
@@ -97,4 +97,4 @@ class IMDB:
 
 if __name__ == '__main__':
     imdb = IMDB()
-    images,boxes = imdb.getItems(10)
+    imdb.convertAnnos()

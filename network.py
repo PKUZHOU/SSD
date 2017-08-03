@@ -17,7 +17,7 @@ class L2Norm2d(nn.Module):
         '''out = scale * x / sqrt(\sum x_i^2)'''
         return self.scale * x * x.pow(2).sum(dim).clamp(min=1e-12).rsqrt().expand_as(x)
 class SSD300(nn.Module):
-    input_size = 300
+    # input_size = 300
 
 
     def __init__(self):
@@ -46,6 +46,7 @@ class SSD300(nn.Module):
     def forward(self,x):
         hs = []
         mutibox = Multibox()
+        mutibox.cuda()
         h = self.base(x)
 
         self.norm4 = L2Norm2d(20)
